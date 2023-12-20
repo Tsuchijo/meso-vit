@@ -1,13 +1,14 @@
-import training
+
 import cebra
 import numpy as np
 import torch
-import cebra_utils
 import os
 import re
 import tifffile
-import cv2
 import torchvision
+import sys
+import pandas as pd
+import training
 
 ## Given the path to a tif file, return that as a 3d numpy array
 # @param path: path to tif file
@@ -23,6 +24,12 @@ def load_brain_data(parent_directory, trial_num, type='gcamp'):
     data_path = os.path.join(parent_directory, 'trial_' + str(trial_num) + '/brain/' + type + '.tif')
     data = load_tif(data_path)
     return data
+
+def load_pose_data(parent_directory, trial):
+    trial_path = os.path.join(parent_directory, 'trial_' + str(trial) + '/camC/')
+    trial_path = trial_path + [str for str in os.listdir(trial_path) if re.match('\w*DLC\w*.csv', str)][0]
+    df = pd.read_csv(trial_path, skiprows=2)
+    return df.filter(regex='x|y').to_numpy()
 
 ## Creat and train the model in partial batches of data
 def train_model(model, dataloader, criterion, loader_type, device, output_model_path):
@@ -69,7 +76,7 @@ def load_test_train(data_path, split, image_size=64, use_pose=False, embedding_p
     split_indices = [int(x) for x in split_indices]
     brain_data = [load_brain_data(data_path, x) for x in split_indices]
     if use_pose == True:
-        feature_data = [training.load_pose_data(data_path, x) for x in split_indices]
+        feature_data = [load_pose_data(data_path, x) for x in split_indices]
     else:
         feature_data = [training.load_embedding_data(embedding_path, x) for x in split_indices]
     # flatten the first dimension of brain data
@@ -79,7 +86,7 @@ def load_test_train(data_path, split, image_size=64, use_pose=False, embedding_p
     flattened_brain_data = np.concatenate(brain_data, axis=0)
     flattened_feature_data = np.concatenate(feature_data, axis=0)
     # create a discrete tensor for the brain data of 0-288 repeating
-    discrete_training_data = np.concatenate(np.array([np.arange(288) for _ in range(len(brain_data))]), axis=0)
+    discrete_training_data = np.concatenate(([np.arange(len(brain_data[i])) for i in range(len(brain_data))]), axis=0)
     return flattened_brain_data, flattened_feature_data, discrete_training_data
 
 ## Load Train data on multiple trials and concatenate them
@@ -89,7 +96,11 @@ def load_test_train(data_path, split, image_size=64, use_pose=False, embedding_p
 def load_train_data_multi(data_paths, split, image_size=64, use_pose=False, embedding_paths=None):
     for i, data_path in enumerate(data_paths):
         print('Loading data from ' + data_path)
-        flattened_brain_data, flattened_feature_data, discrete_training_data = load_test_train(data_path, split, image_size, use_pose, embedding_paths[i])
+        if embedding_paths is not None:
+            flattened_brain_data, flattened_feature_data, discrete_training_data = load_test_train(data_path, split, image_size, use_pose, embedding_paths[i])
+        else:
+            flattened_brain_data, flattened_feature_data, discrete_training_data = load_test_train(data_path, split, image_size, use_pose)
+        assert len(flattened_brain_data) == len(flattened_feature_data), f"Failed to load: {i}"
         if i == 0:
             brain_data = flattened_brain_data
             feature_data = flattened_feature_data
@@ -105,34 +116,39 @@ if __name__ == "__main__":
 
 
 
-    ## Multi Session Data Loading
+    # ## Multi Session Data Loading
+    # data_paths = [
+    #     '/mnt/teams/TM_Lab/Tony/water_reaching/Data/rig1_data/processed/FRM1_2023-07-07_1',
+    #     '/mnt/teams/TM_Lab/Tony/water_reaching/Data/rig1_data/processed/FRM1_2023-06-24_1',
+    #     '/mnt/teams/TM_Lab/Tony/water_reaching/Data/rig1_data/processed/FRM1_2023-06-25_1',
+    #     '/mnt/teams/TM_Lab/Tony/water_reaching/Data/rig1_data/processed/FRM1_2023-06-27_1',
+    # ]
+
+    # embedding_paths = [
+    #     '/home/murph_4090ws/Documents/CEBRA-vit/FRM1_7-07',
+    #     '/home/murph_4090ws/Documents/CEBRA-vit/FRM1_6-24',
+    #     '/home/murph_4090ws/Documents/CEBRA-vit/FRM1_6-25',
+    #     '/home/murph_4090ws/Documents/CEBRA-vit/FRM1_6-27',
+    # ]
+
     data_paths = [
-        '/mnt/teams/TM_Lab/Tony/water_reaching/Data/rig1_data/processed/FRM1_2023-07-07_1',
-        '/mnt/teams/TM_Lab/Tony/water_reaching/Data/rig1_data/processed/FRM1_2023-06-24_1',
-        '/mnt/teams/TM_Lab/Tony/water_reaching/Data/rig1_data/processed/FRM1_2023-06-25_1',
-        '/mnt/teams/TM_Lab/Tony/water_reaching/Data/rig1_data/processed/FRM1_2023-06-27_1',
+        '/mnt/teams/TM_Lab/Tony/water_reaching/Data/rig1_data/processed/FRM2_2023-06-06_1',
+        '/mnt/teams/TM_Lab/Tony/water_reaching/Data/rig1_data/processed/FRM2_2023-07-06_1'
     ]
-
-    embedding_paths = [
-        '/home/murph_4090ws/Documents/Water_Reaching_Classifier/FRM1_7-07',
-        '/home/murph_4090ws/Documents/Water_Reaching_Classifier/FRM1_6-24',
-        '/home/murph_4090ws/Documents/Water_Reaching_Classifier/FRM1_6-25',
-        '/home/murph_4090ws/Documents/Water_Reaching_Classifier/FRM1_6-27',
-    ]
-
+    embedding_paths = None
 
     ## For Training Square patched
     Model_2D = True
     Model_Name = "TinyViT-v1"
     Image_Size = None
     depth = 64
-    output_model_path='batch_trained_ViT.pth'
+    output_model_path='batch_trained_ViT_pose.pth'
     mask_path = '/mnt/teams/TM_Lab/Tony/water_reaching/Data/rig1_data/processed/FRM1_2023-07-07_1/mask.csv'
     model = cebra.models.init(
         Model_Name, 
         num_neurons=256,
         num_units=12,
-        num_output=8,
+        num_output=64,
     ).to('cuda')
 
     criteria = cebra.models.criterions.LearnableCosineInfoNCE(temperature=1, min_temperature=0.2)
@@ -148,11 +164,16 @@ if __name__ == "__main__":
     splits = np.tile(splits, (10, 1))
     ## randomize the splits
     np.random.shuffle(splits)
-    flattened_brain_data_all, flattened_feature_data_all, discrete_data__all, _, _ = load_train_data_multi(data_paths, (0,1), Image_Size, use_pose=False, embedding_paths=embedding_paths)
+    flattened_brain_data_all, flattened_feature_data_all, discrete_data__all, _, _ = load_train_data_multi(data_paths, (0,1), Image_Size, use_pose=True, embedding_paths=embedding_paths)
     ## Resize data to be 256 x 256
     print('Resizing data')
     transform = torchvision.transforms.Resize((256,256))
     flattened_brain_data_all = transform(torch.from_numpy(flattened_brain_data_all)).numpy()
+
+    print(len(flattened_brain_data_all))
+    print(len(flattened_feature_data_all))
+    print(len(discrete_data__all))
+
     for split in splits:
 
         ## partition the data based off current split
